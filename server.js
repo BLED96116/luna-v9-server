@@ -1,85 +1,66 @@
 const express = require('express');
-const axios = require('axios');
+const fs = require('fs');
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const DATA_FILE = 'data.json';
 
-let baseForme = {};
+// Charger la base de données
+let DB = { joueurs: {}, matchs: [] };
+if (fs.existsSync(DATA_FILE)) {
+  DB = JSON.parse(fs.readFileSync(DATA_FILE));
+}
 
-app.post('/predict', async (req, res) => {
+app.post('/predict', (req, res) => {
   const { j1, j2, competition } = req.body;
 
-  if (!j1 ||!j2 ||!competition) {
-    return res.status(400).json({ error: "Il manque j1, j2 ou competition" });
-  }
+  const statsJ1 = calculerStats(j1, competition);
+  const statsJ2 = calculerStats(j2, competition);
+  const h2h = calculerH2H(j1, j2);
 
-  try {
-    // ETAPE 1 : Récupérer les cotes avec anti-crash
-    const cotes = await getCotesSafe(competition);
+  // ALGO V9.3
+  let scoreJ1 = statsJ1.forme * 0.45 + statsJ1.site * 0.20 + h2h.j1 * 0.25 + 5;
+  let scoreJ2 = statsJ2.forme * 0.45 + statsJ2.site * 0.20 + h2h.j2 * 0.25 + 5;
 
-    // ETAPE 2 : Calculer la forme
-    const formeJ1 = getForme(j1);
-    const formeJ2 = getForme(j2);
+  const vainqueur = scoreJ1 > scoreJ2? j1 : j2;
+  const fiabilite = 55 + Math.abs(scoreJ1 - scoreJ2); // Base 55%
 
-    // ETAPE 3 : ALGO V9.2.1
-    let scoreJ1 = formeJ1 * 0.4;
-    let scoreJ2 = formeJ2 * 0.4;
-
-    // 30% Cotes
-    if(cotes.j1 < cotes.j2) scoreJ1 += 30; else scoreJ2 += 30;
-
-    // 20% Bonus site
-    if(competition.toLowerCase().includes('setka')) scoreJ1 += 5;
-
-    // 10% Random
-    scoreJ1 += Math.random() * 10;
-    scoreJ2 += Math.random() * 10;
-
-    const vainqueur = scoreJ1 > scoreJ2? j1 : j2;
-    const fiabilite = Math.abs(scoreJ1 - scoreJ2) + 50;
-
-    res.json({
-      competition,
-      match: `${j1} vs ${j2}`,
-      vainqueur,
-      score: scoreJ1 > scoreJ2? "3-1" : "1-3",
-      fiabilite: Math.min(95, Math.round(fiabilite)),
-      detail: `${j1}: Forme ${formeJ1}% Cote ${cotes.j1} | ${j2}: Forme ${formeJ2}% Cote ${cotes.j2}`,
-      cotes_reelles: cotes,
-      source: "Algo V9.2.1"
-    });
-
-  } catch(err) {
-    console.log("ERREUR:", err.message);
-    res.status(500).json({ error: "Erreur serveur: " + err.message });
-  }
+  res.json({
+    competition,
+    match: `${j1} vs ${j2}`,
+    vainqueur,
+    score_pred: scoreJ1 > scoreJ2? "3-1" : "1-3",
+    fiabilite: Math.min(92, Math.round(fiabilite)),
+    detail: `${j1}: Forme ${statsJ1.forme}% Site ${statsJ1.site}% | ${j2}: Forme ${statsJ2.forme}% Site ${statsJ2.site}%`,
+    h2h: `${h2h.j1}V - ${h2h.j2}V`,
+    source: "Algo V9.3 Indépendant"
+  });
 });
 
-// FONCTION ANTI-CRASH POUR LES COTES
-async function getCotesSafe(competition) {
-  try {
-    // On essaye de scraper mais avec timeout court
-    let url = competition.toLowerCase().includes('setka')
-     ? 'https://setka-cup.com/'
-      : 'https://tt-elite.com/';
+// FONCTIONS DE CALCUL
+function calculerStats(nom, site) {
+  if (!DB.joueurs[nom]) return { forme: 50, site: 50 }; // Inconnu = 50%
 
-    await axios.get(url, { timeout: 3000 }); // 3sec max
-    // Si ça passe on met des cotes random proches
-    return { j1: 1.85 + Math.random()*0.2, j2: 1.85 + Math.random()*0.2 };
+  const matchs = DB.joueurs[nom].matchs;
+  const derniers10 = matchs.slice(-10);
+  const victoires = derniers10.filter(m => m.gagne).length;
+  const forme = (victoires / derniers10.length) * 100 || 50;
 
-  } catch {
-    // Si ça bloque, on met des cotes neutres pour pas crash
-    console.log("Scrap bloqué, utilisation cotes par défaut");
-    return { j1: 1.90, j2: 1.90 };
-  }
+  const surSite = matchs.filter(m => m.site === site);
+  const victoiresSite = surSite.filter(m => m.gagne).length;
+  const perfSite = (victoiresSite / surSite.length) * 100 || 50;
+
+  return { forme: Math.round(forme), site: Math.round(perfSite) };
 }
 
-function getForme(nom) {
-  if(!baseForme[nom]) {
-    baseForme[nom] = 40 + Math.random() * 20;
-  }
-  return Math.round(baseForme[nom]);
+function calculerH2H(j1, j2) {
+  const confrontations = DB.matchs.filter(m =>
+    (m.j1 === j1 && m.j2 === j2) || (m.j1 === j2 && m.j2 === j1)
+  );
+  const vJ1 = confrontations.filter(m => m.vainqueur === j1).length;
+  const vJ2 = confrontations.filter(m => m.vainqueur === j2).length;
+  return { j1: vJ1, j2: vJ2 };
 }
 
-app.listen(PORT, () => console.log(`Luna V9.2.1 Server lancé sur ${PORT}`));
+app.listen(PORT, () => console.log(`Luna V9.3 Server Indépendant lancé`));
