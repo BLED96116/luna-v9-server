@@ -62,5 +62,23 @@ function calculerH2H(j1, j2) {
   const vJ2 = confrontations.filter(m => m.vainqueur === j2).length;
   return { j1: vJ1, j2: vJ2 };
 }
+app.post('/add-result', (req, res) => {
+  const { j1, j2, vainqueur, score, site } = req.body;
 
+  // Sauvegarder le match
+  DB.matchs.push({ j1, j2, vainqueur, score, site, date: new Date() });
+
+  // Mettre à jour stats j1
+  if(!DB.joueurs[j1]) DB.joueurs[j1] = { matchs: [] };
+  DB.joueurs[j1].matchs.push({ adversaire: j2, gagne: vainqueur === j1, site });
+
+  // Mettre à jour stats j2
+  if(!DB.joueurs[j2]) DB.joueurs[j2] = { matchs: [] };
+  DB.joueurs[j2].matchs.push({ adversaire: j1, gagne: vainqueur === j2, site });
+
+  // Sauvegarder dans data.json
+  fs.writeFileSync(DATA_FILE, JSON.stringify(DB, null, 2));
+
+  res.json({ success: true, message: `Match ajouté. Luna a maintenant ${DB.matchs.length} matchs en mémoire` });
+});
 app.listen(PORT, () => console.log(`Luna V9.3 Server Indépendant lancé`));
